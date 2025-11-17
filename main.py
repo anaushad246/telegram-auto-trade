@@ -1,16 +1,28 @@
-# --- NEW CODE FOR main.py ---
 import sys
-import telegram_listener  # Changed
-import trade_manager      # Changed
-import config             # Changed
+import telegram_listener
+import trade_manager
+import config
+import asyncio # New import
 
-def main():
+async def monitor_loop():
+    """
+    Runs the automatic BE monitor every 10 seconds.
+    """
+    while True:
+        try:
+            trade_manager.monitor_automatic_be()
+        except Exception as e:
+            print(f"❌ [Monitor Loop] Error: {e}")
+        
+        await asyncio.sleep(10) # Wait 10 seconds
+
+async def main():
     """
     Main entry point for the bot.
-    Connects to MT5 and starts the Telegram listener.
+    Connects to MT5, starts the trade monitor, and starts the Telegram listener.
     """
     print("================================")
-    print("   Telegram to MT5 AI Bot   ")
+    print("   Telegram to MT5 AI Bot (v2)  ")
     print("================================")
     
     try:
@@ -19,18 +31,26 @@ def main():
             print("Failed to connect to MT5. Exiting.", file=sys.stderr)
             sys.exit(1)
             
-        # 2. Start the Telegram listener
-        # This function will run forever until you stop it (Ctrl+C)
-        telegram_listener.start_listening()
+        # 2. Start the Telegram listener (does not block)
+        await telegram_listener.client.start(phone=config.PHONE)
+        await telegram_listener.start_listening()
+        
+        # 3. Start the new Auto-BE Monitor in the background
+        print("💡 [Monitor] Automatic BE monitor is starting...")
+        monitor_task = asyncio.create_task(monitor_loop())
+        
+        # 4. Run forever
+        print("🚀 Bot is now fully running. Waiting for signals and monitoring trades...")
+        await telegram_listener.client.run_until_disconnected()
         
     except KeyboardInterrupt:
         print("\n🛑 Bot shutting down (Ctrl+C detected)...")
     except Exception as e:
         print(f"\n❌ An unexpected error occurred: {e}", file=sys.stderr)
     finally:
-        # 3. Always shut down the MT5 connection gracefully
+        # 5. Always shut down the MT5 connection gracefully
         trade_manager.shutdown_mt5()
         print("✅ Bot has been shut down.")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

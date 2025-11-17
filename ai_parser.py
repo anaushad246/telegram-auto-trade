@@ -2,58 +2,62 @@ import json
 import google.generativeai as genai
 import config
 
-# --- Configure the Gemini Client ---
 genai.configure(api_key=config.GEMINI_API_KEY)
+json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
+model = genai.GenerativeModel('models/gemini-flash-latest', generation_config=json_generation_config)
 
-# --- Set up the model ---
-json_generation_config = genai.GenerationConfig(
-    response_mime_type="application/json"
-)
-model = genai.GenerativeModel(
-    'models/gemini-flash-latest', # This is the model name that works for you
-    generation_config=json_generation_config
-)
-
-# --- THIS IS THE UPGRADED PROMPT ---
+# --- THIS IS THE FINAL UPGRADED PROMPT ---
 SYSTEM_PROMPT = """
 You are an expert trading assistant. Your task is to parse raw text from Telegram signals
 and convert them into a structured JSON object.
 
 RULES:
-1.  **Symbols:** Convert common names to standard MT5 symbols (e.g., "Gold" or "XAU" -> "XAUUSD", "GBP" -> "GBPUSD").
-2.  **Action:** Must be "BUY" or "SELL".
+1.  **Symbols:** Convert common names to standard MT5 symbols (e.g., "Gold" or "XAU" -> "XAUUSD").
+2.  **Action:**
+    - "BUY" or "SELL" for new trades.
+    - "MODIFY" for changing existing trades.
 3.  **Order Type:**
-    - If the signal says "buy now", "sell now", or just gives an entry range, it is "MARKET".
-    - If the signal explicitly says "BUY LIMIT", "SELL LIMIT", "BUY STOP", or "SELL STOP", you MUST use that exact type (e.g., "BUY_LIMIT").
-4.  **Entry Price:**
-    - For "MARKET" orders, this is the "safe" entry zone. It can be a range (e.g., [4001.0, 3999.0]) or a single price (e.g., [4000.5]).
-    - For **Pending Orders** (LIMIT/STOP), this is the *trigger price*. It will always be a single price (e.g., [3990.0]).
-    - If no entry is given, set to null.
-5.  **Stop Loss (SL):** Must be a single float.
-6.  **Take Profits (TP):** Must be a list of floats. Extract all TPs.
+    - New Trades: "MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP".
+    - Modify Trades:
+        - "BE", "Break Even", "SL to Entry" -> "BREAK_EVEN"
+        - "Move SL", "SL Trail", "Update SL" -> "MOVE_SL"
+        - "Move TP", "TP Reset", "Update TP" -> "MOVE_TP"
+4.  **Entry Price (entry_range):**
+    - "MARKET" orders: A range [4001.0, 3999.0] or a single price [4000.5].
+    - "Pending Orders": The trigger price [3990.0].
+    - "MODIFY" actions: null.
+5.  **Stop Loss (sl) & Take Profits (tp_list):**
+    - For new trades, extract these.
+    - For "MODIFY" actions, these can be null.
+6.  **Value (value):**
+    - For "MOVE_SL" or "MOVE_TP", this is the new target price. (e.g., "Move SL XAUUSD 4010" -> "value": 4010.0)
+    - For "BREAK_EVEN" or new trades, this is null.
 7.  **Not a Signal:** If the text is a chat message, news, or anything other than a trade signal, return `null`.
 
 JSON FORMAT EXAMPLES:
 
-Example 1 (Market Order with range):
+Example 1 (Market Order):
 {
   "symbol": "XAUUSD", "action": "SELL", "order_type": "MARKET",
-  "entry_range": [4001.0, 3999.0],
-  "stop_loss": 4004.0, "take_profits": [3995.0, 3990.0]
+  "entry_range": [4001.0, 3999.0], "sl": 4004.0, "tp_list": [3995.0, 3990.0], "value": null
 }
 
-Example 2 (Market Order with single price):
-{
-  "symbol": "XAUUSD", "action": "SELL", "order_type": "MARKET",
-  "entry_range": [4000.5],
-  "stop_loss": 4005.0, "take_profits": [3998.0, 3996.0]
-}
-
-Example 3 (Pending Order):
+Example 2 (Pending Order):
 {
   "symbol": "XAUUSD", "action": "BUY", "order_type": "BUY_LIMIT",
-  "entry_range": [3990.0],
-  "stop_loss": 3985.0, "take_profits": [4000.0]
+  "entry_range": [3990.0], "sl": 3985.0, "tp_list": [4000.0], "value": null
+}
+
+Example 3 (Manual Break-Even Signal):
+{
+  "symbol": "XAUUSD", "action": "MODIFY", "order_type": "BREAK_EVEN",
+  "entry_range": null, "sl": null, "tp_list": null, "value": null
+}
+
+Example 4 (Manual SL Trail Signal):
+{
+  "symbol": "XAUUSD", "action": "MODIFY", "order_type": "MOVE_SL",
+  "entry_range": null, "sl": null, "tp_list": null, "value": 4010.0
 }
 """
 
@@ -66,7 +70,6 @@ def parse_signal_with_ai(raw_text):
         full_prompt = SYSTEM_PROMPT + "\n\n--- PARSE THIS SIGNAL --- \n" + raw_text
 
         response = model.generate_content(full_prompt)
-        
         result_json = response.text
         
         if result_json == "null":
@@ -75,7 +78,7 @@ def parse_signal_with_ai(raw_text):
             
         signal_data = json.loads(result_json)
         
-        if not all(k in signal_data for k in ["symbol", "action", "order_type", "stop_loss", "take_profits"]):
+        if not all(k in signal_data for k in ["symbol", "action", "order_type"]):
              print(f"❌ [Gemini Parser] AI output missing required fields: {result_json}")
              return None
 
