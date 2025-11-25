@@ -1,7 +1,7 @@
 from telethon import TelegramClient, events
-import config
-import ai_parser
-import trade_manager
+from . import config
+from . import ai_parser
+from . import trade_manager
 import asyncio # New import
 
 # --- THIS IS THE GROUP-TO-MAGIC NUMBER MAP ---

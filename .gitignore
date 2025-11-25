@@ -9,7 +9,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+bot_session.session
 # Distribution / packaging
 .Python
 build/

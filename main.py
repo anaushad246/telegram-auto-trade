@@ -1,8 +1,8 @@
 import sys
-import telegram_listener
-import trade_manager
-import config
-import asyncio # New import
+import asyncio
+from src import telegram_listener
+from src import trade_manager
+from src import config
 
 async def monitor_loop():
     """

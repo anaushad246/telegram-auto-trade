@@ -1,10 +1,3 @@
-import MetaTrader5 as mt5
-import config
-import time
-
-# We need to keep track of deals we've already processed for Auto-BE
-processed_deal_tickets = set()
-
 def connect_to_mt5():
     print("📈 [MT5] Connecting...")
     if not mt5.initialize(login=config.MT5_LOGIN, password=config.MT5_PASSWORD, server=config.MT5_SERVER):

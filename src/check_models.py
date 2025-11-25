@@ -1,5 +1,5 @@
 import google.generativeai as genai
-import config
+from . import config
 
 try:
     print(f"--- Using API Key: {'*' * 10}{config.GEMINI_API_KEY[-4:]}")

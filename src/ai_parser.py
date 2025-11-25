@@ -1,12 +1,3 @@
-import json
-import google.generativeai as genai
-import config
-
-genai.configure(api_key=config.GEMINI_API_KEY)
-json_generation_config = genai.GenerationConfig(response_mime_type="application/json")
-model = genai.GenerativeModel('models/gemini-flash-latest', generation_config=json_generation_config)
-
-# --- THIS IS THE FINAL UPGRADED PROMPT ---
 SYSTEM_PROMPT = """
 You are an expert trading assistant. Your task is to parse raw text from Telegram signals
 and convert them into a structured JSON object.
