@@ -1,81 +1,139 @@
+import json
+import google.generativeai as genai
+# import config
+from . import config
+
+# ==========================================
+#   INITIALIZE GEMINI
+# ==========================================
+try:
+    genai.configure(api_key=config.GEMINI_API_KEY)
+
+    # Force JSON output from Gemini
+    json_generation_config = genai.GenerationConfig(
+        response_mime_type="application/json"
+    )
+
+    # Use the correct model for OLD API (v1beta)
+    model = genai.GenerativeModel(
+        model_name="models/gemini-flash-latest",
+        generation_config=json_generation_config
+    )
+
+    print("✅ [Gemini Parser] Model initialized: models/gemini-flash-latest")
+
+except Exception as e:
+    print(f"❌ [Gemini Parser] Failed to initialize Gemini model: {e}")
+    model = None
+
+
+# ==========================================
 SYSTEM_PROMPT = """
-You are an expert trading assistant. Your task is to parse raw text from Telegram signals
-and convert them into a structured JSON object.
+You are an expert trading assistant. Your job is to convert Telegram signal text
+into a strict JSON object used for trading automation.
 
-RULES:
-1.  **Symbols:** Convert common names to standard MT5 symbols (e.g., "Gold" or "XAU" -> "XAUUSD").
-2.  **Action:**
-    - "BUY" or "SELL" for new trades.
-    - "MODIFY" for changing existing trades.
-3.  **Order Type:**
-    - New Trades: "MARKET", "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP".
-    - Modify Trades:
-        - "BE", "Break Even", "SL to Entry" -> "BREAK_EVEN"
-        - "Move SL", "SL Trail", "Update SL" -> "MOVE_SL"
-        - "Move TP", "TP Reset", "Update TP" -> "MOVE_TP"
-4.  **Entry Price (entry_range):**
-    - "MARKET" orders: A range [4001.0, 3999.0] or a single price [4000.5].
-    - "Pending Orders": The trigger price [3990.0].
-    - "MODIFY" actions: null.
-5.  **Stop Loss (sl) & Take Profits (tp_list):**
-    - For new trades, extract these.
-    - For "MODIFY" actions, these can be null.
-6.  **Value (value):**
-    - For "MOVE_SL" or "MOVE_TP", this is the new target price. (e.g., "Move SL XAUUSD 4010" -> "value": 4010.0)
-    - For "BREAK_EVEN" or new trades, this is null.
-7.  **Not a Signal:** If the text is a chat message, news, or anything other than a trade signal, return `null`.
+STRICT RULES:
 
-JSON FORMAT EXAMPLES:
+1. SYMBOL:
+   - "Gold", "GOLD", "XAU", "XAUUSD" → "XAUUSD"
+   - If symbol cannot be detected → return null.
 
-Example 1 (Market Order):
+2. ACTION:
+   - BUY or SELL for new trades.
+   - MODIFY for updates.
+   - If action cannot be detected → return null.
+
+3. ORDER TYPE:
+   - MARKET, BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP.
+   - For modify actions: BREAK_EVEN, MOVE_SL, MOVE_TP.
+   - If order type cannot be detected → return null.
+
+4. ENTRY RANGE:
+   - MARKET: include 1 or 2 numbers (entry zone).
+   - Pending orders: include 1 number (trigger price).
+   - MODIFY: entry_range = null.
+
+5. STOP LOSS (sl):
+   - REQUIRED for all new trades.
+   - Must be a single number.
+   - If no valid SL detected → return null.
+
+6. TAKE PROFIT LIST (tp_list):
+   - REQUIRED for all new trades.
+   - Must contain at least ONE valid numeric TP.
+   - If no TP detected → return null.
+
+7. MODIFY ACTIONS:
+   - For MOVE_SL or MOVE_TP → include "value" as the updated level.
+   - For BREAK_EVEN → value = null.
+   - For MODIFY actions sl=null, tp_list=null.
+
+8. If the message is NOT a valid trading signal → return null.
+
+9. Always respond in VALID JSON ONLY:
 {
-  "symbol": "XAUUSD", "action": "SELL", "order_type": "MARKET",
-  "entry_range": [4001.0, 3999.0], "sl": 4004.0, "tp_list": [3995.0, 3990.0], "value": null
+  "symbol": "",
+  "action": "",
+  "order_type": "",
+  "entry_range": [],
+  "sl": 0,
+  "tp_list": [],
+  "value": null
 }
 
-Example 2 (Pending Order):
-{
-  "symbol": "XAUUSD", "action": "BUY", "order_type": "BUY_LIMIT",
-  "entry_range": [3990.0], "sl": 3985.0, "tp_list": [4000.0], "value": null
-}
-
-Example 3 (Manual Break-Even Signal):
-{
-  "symbol": "XAUUSD", "action": "MODIFY", "order_type": "BREAK_EVEN",
-  "entry_range": null, "sl": null, "tp_list": null, "value": null
-}
-
-Example 4 (Manual SL Trail Signal):
-{
-  "symbol": "XAUUSD", "action": "MODIFY", "order_type": "MOVE_SL",
-  "entry_range": null, "sl": null, "tp_list": null, "value": 4010.0
-}
+NO explanations, NO text — only JSON or null.
 """
 
+# ==========================================
+#   PARSER FUNCTION
+# ==========================================
 def parse_signal_with_ai(raw_text):
     """
-    Uses Gemini to parse raw signal text into a structured JSON.
+    Uses Gemini to parse raw signal text into a structured JSON object.
     """
-    print(f"🧠 [Gemini Parser] Analyzing text: \"{raw_text[:50]}...\"")
+
+    if not model:
+        print("❌ [Gemini Parser] Model not initialized.")
+        return None
+
+    print(f"🧠 [Gemini Parser] Analyzing: \"{raw_text[:60]}...\"")
+
     try:
-        full_prompt = SYSTEM_PROMPT + "\n\n--- PARSE THIS SIGNAL --- \n" + raw_text
+        full_prompt = SYSTEM_PROMPT + "\n\n--- PARSE THIS SIGNAL ---\n" + raw_text
 
+        # Make request to Gemini
         response = model.generate_content(full_prompt)
-        result_json = response.text
-        
-        if result_json == "null":
-            print("🧠 [Gemini Parser] Message is not a trade signal.")
-            return None
-            
-        signal_data = json.loads(result_json)
-        
-        if not all(k in signal_data for k in ["symbol", "action", "order_type"]):
-             print(f"❌ [Gemini Parser] AI output missing required fields: {result_json}")
-             return None
 
-        print(f"✅ [Gemini Parser] Signal parsed successfully: {signal_data}")
+        if not response:
+            print("❌ [Gemini Parser] Empty response from Gemini.")
+            return None
+
+        result_json = response.text
+
+        # Clean markdown if included
+        if result_json.startswith("```"):
+            result_json = (
+                result_json.replace("```json", "")
+                .replace("```", "")
+                .strip()
+            )
+
+        if result_json == "null":
+            print("ℹ [Gemini Parser] Not a valid trading signal.")
+            return None
+
+        # Convert to Python dict
+        signal_data = json.loads(result_json)
+
+        # Validate required fields
+        required = ["symbol", "action", "order_type"]
+        if not all(k in signal_data for k in required):
+            print("❌ [Gemini Parser] Missing required fields:", signal_data)
+            return None
+
+        print("✅ [Gemini Parser] Parsed:", signal_data)
         return signal_data
 
     except Exception as e:
-        print(f"❌ [Gemini Parser] Error: {e}")
+        print(f"❌ [Gemini Parser] Parsing Error: {e}")
         return None
