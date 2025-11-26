@@ -77,18 +77,40 @@ def execute_trade_from_json(signal, magic_number):
                 if action == "BUY": price = tick.ask
                 else: price = tick.bid
 
-                # Price Safety Check
+                # --- NEW: TOLERANCE / SLIPPAGE LOGIC ---
+                # Allow price to be "worse" by this amount (e.g., 50 points / $0.50 on Gold)
+                TOLERANCE = 50.0 * tick.point  # Adjust based on your broker (approx 5 pips)
+                
+                # Manual override for Gold/Indices if needed:
+                if "XAU" in symbol or "GOLD" in symbol:
+                    TOLERANCE = 2.00 # Allow $2 difference
+
                 if entry_range:
                     if len(entry_range) == 2: 
                         min_entry, max_entry = min(entry_range), max(entry_range)
-                        if not (min_entry <= price <= max_entry):
-                            print(f"⚠️ [Trader] SKIPPED: Price {price} outside {min_entry}-{max_entry}.")
+                        # Expand the valid range by the tolerance
+                        valid_min = min_entry - TOLERANCE
+                        valid_max = max_entry + TOLERANCE
+                        
+                        if not (valid_min <= price <= valid_max):
+                            print(f"⚠️ [Trader] SKIPPED: Price {price} outside {valid_min}-{valid_max}.")
                             return
+                            
                     elif len(entry_range) == 1:
                         target_price = entry_range[0]
-                        if (action == "BUY" and price > target_price) or (action == "SELL" and price < target_price):
-                            print(f"⚠️ [Trader] SKIPPED: Price {price} worse than {target_price}.")
-                            return
+                        
+                        # Check if price is within the acceptable buffer
+                        if action == "BUY":
+                            if price > (target_price + TOLERANCE):
+                                print(f"⚠️ [Trader] SKIPPED: Price {price} too high above {target_price}.")
+                                return
+                        elif action == "SELL":
+                            if price < (target_price - TOLERANCE):
+                                print(f"⚠️ [Trader] SKIPPED: Price {price} too low below {target_price}.")
+                                return
+                        
+                        print(f"✅ [Trader] Price {price} accepted within tolerance of {target_price}.")
+                # --- END NEW LOGIC ---
 
                 print(f"📈 [Trader] Placing {len(tp_list)} MARKET trades for {action} {symbol}")
                 for tp in tp_list:
@@ -153,14 +175,27 @@ def execute_trade_from_json(signal, magic_number):
                 new_sl, new_tp = position.sl, position.tp
                 
                 if order_type_str == "BREAK_EVEN":
-                    new_sl = position.price_open
+                    # FIX: Add a tiny profit buffer to cover commissions/swaps
+                    # For BUY: Entry + small buffer
+                    # For SELL: Entry - small buffer
+                    profit_buffer = 0.0
+                    if "XAU" in symbol: profit_buffer = 0.10 # Secure 10 cents on Gold
+                    
+                    if position.type == mt5.POSITION_TYPE_BUY:
+                        new_sl = position.price_open + profit_buffer
+                        if new_sl < position.price_open: new_sl = position.price_open # Safety
+                    else:
+                        new_sl = position.price_open - profit_buffer
+                        if new_sl > position.price_open: new_sl = position.price_open
+                        
                 elif order_type_str == "MOVE_SL":
                     new_sl = signal["value"]
                 elif order_type_str == "MOVE_TP":
                     new_tp = signal["value"]
                 
-                if new_sl == position.sl and new_tp == position.tp:
-                    continue # No change needed
+                # Check if change is actually needed
+                if abs(new_sl - position.sl) < 1e-5 and abs(new_tp - position.tp) < 1e-5:
+                    continue 
 
                 request = {
                     "action": mt5.TRADE_ACTION_SLTP,
