@@ -1,56 +1,63 @@
-import sys
 import asyncio
-from src import telegram_listener
-from src import trade_manager
-from src import config
+import sys
+from app.config import config
+from app.log_setup import setup_logger
+from app.services.telegram_svc import TelegramBot
+from app.services.ai_parser_svc import AIService
+from app.services.mt5_svc import MT5Service
+from app.services.trade_executor import TradeExecutor
+from app.workers.monitor import MonitorWorker
 
-async def monitor_loop():
-    """
-    Runs the automatic BE monitor every 10 seconds.
-    """
-    while True:
-        try:
-            trade_manager.monitor_automatic_be()
-        except Exception as e:
-            print(f"❌ [Monitor Loop] Error: {e}")
-        
-        await asyncio.sleep(10) # Wait 10 seconds
+logger = setup_logger("Main")
 
 async def main():
-    """
-    Main entry point for the bot.
-    Connects to MT5, starts the trade monitor, and starts the Telegram listener.
-    """
-    print("================================")
-    print("   Telegram to MT5 AI Bot (v2)  ")
-    print("================================")
+    logger.info("Starting Forex Auto-Trading Bot (SOA)...")
+
+    # 1. Initialize Services
+    ai_service = AIService()
+    mt5_service = MT5Service()
     
+    # Connect to MT5 immediately
+    if not mt5_service.connect():
+        logger.critical("Failed to connect to MT5. Exiting.")
+        return
+
+    trade_executor = TradeExecutor(mt5_service)
+    monitor_worker = MonitorWorker(trade_executor)
+    
+    # 2. Define the pipeline (Orchestration)
+    async def pipeline(text: str, magic_number: int):
+        """
+        Callback function triggered by new Telegram messages.
+        """
+        logger.info(f"Pipeline triggered for group {magic_number}")
+        
+        # A. Parse with AI
+        signal = await ai_service.parse_signal(text)
+        
+        # B. Execute if valid
+        if signal:
+            # We run this synchronously (blocking the event loop slightly) or offload it.
+            # Since MT5 python library is blocking, we might want to run it in an executor if high volume.
+            # For now, direct call is fine as per original design.
+            trade_executor.execute_signal(signal, magic_number)
+
+    # 3. Initialize Telegram Bot with the pipeline callback
+    bot = TelegramBot(callback=pipeline)
+    
+    # 4. Run everything
     try:
-        # 1. Connect to MetaTrader 5
-        if not trade_manager.connect_to_mt5():
-            print("Failed to connect to MT5. Exiting.", file=sys.stderr)
-            sys.exit(1)
-            
-        # 2. Start the Telegram listener (does not block)
-        await telegram_listener.client.start(phone=config.PHONE)
-        await telegram_listener.start_listening()
-        
-        # 3. Start the new Auto-BE Monitor in the background
-        print("💡 [Monitor] Automatic BE monitor is starting...")
-        monitor_task = asyncio.create_task(monitor_loop())
-        
-        # 4. Run forever
-        print("🚀 Bot is now fully running. Waiting for signals and monitoring trades...")
-        await telegram_listener.client.run_until_disconnected()
-        
+        await asyncio.gather(
+            bot.start(),
+            monitor_worker.start_loop()
+        )
     except KeyboardInterrupt:
-        print("\n🛑 Bot shutting down (Ctrl+C detected)...")
-    except Exception as e:
-        print(f"\n❌ An unexpected error occurred: {e}", file=sys.stderr)
+        logger.info("Stopping bot...")
     finally:
-        # 5. Always shut down the MT5 connection gracefully
-        trade_manager.shutdown_mt5()
-        print("✅ Bot has been shut down.")
+        mt5_service.shutdown()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
