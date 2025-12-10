@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 import google.generativeai as genai
 from app.config import config
 from app.log_setup import setup_logger
@@ -18,57 +19,17 @@ class AIService:
 
             # Use the correct model for OLD API (v1beta)
             self.model = genai.GenerativeModel(
-                model_name="models/gemini-flash-latest",
+                model_name="models/gemini-2.5-flash-lite",
                 generation_config=json_generation_config
             )
-            logger.info("Model initialized: models/gemini-flash-latest")
+            logger.info("Model initialized: models/gemini-2.5-flash-lite")
         except Exception as e:
             logger.error(f"Failed to initialize Gemini model: {e}")
             self.model = None
 
         self.system_prompt = """
-You are an expert trading assistant. Your job is to convert Telegram signal text
-into a strict JSON object used for trading automation.
+You are a trading-signal parser. Convert the given message into the following JSON:
 
-STRICT RULES:
-
-1. SYMBOL:
-   - "Gold", "GOLD", "XAU", "XAUUSD" → "XAUUSD"
-   - If symbol cannot be detected → return null.
-
-2. ACTION:
-   - BUY or SELL for new trades.
-   - MODIFY for updates.
-   - If action cannot be detected → return null.
-
-3. ORDER TYPE:
-   - MARKET, BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP.
-   - For modify actions: BREAK_EVEN, MOVE_SL, MOVE_TP.
-   - If order type cannot be detected → return null.
-
-4. ENTRY RANGE:
-   - MARKET: include 1 or 2 numbers (entry zone).
-   - Pending orders: include 1 number (trigger price).
-   - MODIFY: entry_range = null.
-
-5. STOP LOSS (sl):
-   - REQUIRED for all new trades.
-   - Must be a single number.
-   - If no valid SL detected → return null.
-
-6. TAKE PROFIT LIST (tp_list):
-   - REQUIRED for all new trades.
-   - Must contain at least ONE valid numeric TP.
-   - If no TP detected → return null.
-
-7. MODIFY ACTIONS:
-   - For MOVE_SL or MOVE_TP → include "value" as the updated level.
-   - For BREAK_EVEN → value = null.
-   - For MODIFY actions sl=null, tp_list=null.
-
-8. If the message is NOT a valid trading signal → return null.
-
-9. Always respond in VALID JSON ONLY:
 {
   "symbol": "",
   "action": "",
@@ -79,7 +40,25 @@ STRICT RULES:
   "value": null
 }
 
-NO explanations, NO text — only JSON or null.
+Rules:
+1. SYMBOL: Map "Gold", "GOLD", "XAU", "XAUUSD" -> "XAUUSD". If missing -> null.
+2. ACTION: BUY, SELL, or MODIFY. If missing -> null.
+3. ORDER TYPE:
+   - New orders: MARKET, BUY_LIMIT, SELL_LIMIT, BUY_STOP, SELL_STOP.
+   - Modify: BREAK_EVEN, MOVE_SL, MOVE_TP.
+4. ENTRY RANGE:
+   - MARKET: 1-2 numbers.
+   - Pending: 1 number.
+   - MODIFY: null.
+5. SL: Required for new trades. One number. If missing -> null.
+6. TP_LIST: At least 1 TP. If none -> null.
+7. MODIFY:
+   - MOVE_SL or MOVE_TP -> "value" = updated level.
+   - BREAK_EVEN -> value = null.
+   - For MODIFY: sl = null, tp_list = null.
+8. If not a valid trading signal -> return null.
+9. Output JSON only. No text.
+
 """
 
     async def parse_signal(self, raw_text: str) -> Optional[TradeSignal]:

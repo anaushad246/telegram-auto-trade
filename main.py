@@ -32,6 +32,23 @@ async def main():
         """
         logger.info(f"Pipeline triggered for group {magic_number}")
         
+        # Simple Keyword Filter
+        FULL_KEYWORDS = [
+            "BUY", "SELL", "LIMIT", "STOP", "TP", "SL", "XAU", "GOLD",
+            "ENTRY", "EXECUTE", "CLOSE", "MODIFY", "UPDATE", "MOVE", "BE", "OPEN", "RISK",
+            "TAKE PROFIT", "STOP LOSS", "PENDING", "INSTANT", "PIP", "PIPS", "POINT", "POINTS",
+            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "US30", "DOW", "NAS100", "NASDAQ",
+            "BTC", "ETH", "OIL", "CRUDE"
+        ]
+        
+        # Convert text to uppercase for checking
+        text_upper = text.upper()
+
+        # Only send to AI if at least 2 keywords are present
+        if sum(1 for word in FULL_KEYWORDS if word in text_upper) < 2:
+            logger.info("Ignored message (No trading keywords found).")
+            return
+
         # A. Parse with AI
         signal = await ai_service.parse_signal(text)
         
