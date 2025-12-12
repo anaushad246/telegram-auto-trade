@@ -1,6 +1,7 @@
 import json
 from typing import Optional
-import google.generativeai as genai
+# import google.generativeai as genai # REMOVE THIS LINE
+import openai # ADD THIS LINE
 from app.config import config
 from app.log_setup import setup_logger
 from app.models.signal import TradeSignal
@@ -10,22 +11,19 @@ logger = setup_logger("AIService")
 class AIService:
     def __init__(self):
         try:
-            genai.configure(api_key=config.GEMINI_API_KEY)
+            # Configure the OpenAI client to use the OpenRouter API endpoint
+            self.client = openai.AsyncClient(
+                base_url="https://openrouter.ai/api/v1", # OpenRouter Base URL
+                api_key=config.OPENROUTER_API_KEY
+            )
+            # The model name is now retrieved from config
+            self.model_name = config.OPENROUTER_MODEL
             
-            # Force JSON output from Gemini
-            json_generation_config = genai.GenerationConfig(
-                response_mime_type="application/json"
-            )
-
-            # Use the correct model for OLD API (v1beta)
-            self.model = genai.GenerativeModel(
-                model_name="models/gemini-2.5-flash-lite",
-                generation_config=json_generation_config
-            )
-            logger.info("Model initialized: models/gemini-2.5-flash-lite")
+            logger.info(f"AI Service initialized. Using model: {self.model_name} via OpenRouter.")
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini model: {e}")
-            self.model = None
+            logger.error(f"Failed to initialize OpenRouter client: {e}")
+            self.client = None
+            self.model_name = None
 
         self.system_prompt = """
 You are a trading-signal parser. Convert the given message into the following JSON:
@@ -63,31 +61,35 @@ Rules:
 
     async def parse_signal(self, raw_text: str) -> Optional[TradeSignal]:
         """
-        Uses Gemini to parse raw signal text into a structured TradeSignal object.
+        Uses OpenRouter/DeepSeek to parse raw signal text into a structured TradeSignal object.
         """
-        if not self.model:
-            logger.error("Model not initialized.")
+        if not self.client:
+            logger.error("AI client not initialized.")
             return None
 
-        logger.info(f"Analyzing: \"{raw_text[:60]}...\"")
+        logger.info(f"Analyzing: \"{raw_text[:60]}...\" using {self.model_name}")
 
         try:
-            full_prompt = self.system_prompt + "\n\n--- PARSE THIS SIGNAL ---\n" + raw_text
+            # OpenRouter uses the standard Chat Completions API format
+            messages = [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": raw_text}
+            ]
 
-            # Make request to Gemini (synchronous call wrapped if needed, but genai is sync by default usually unless async method used)
-            # The library supports async but standard generate_content is sync. 
-            # For high throughput we might want to run in executor, but for now direct call is fine or use async_generate_content if available.
-            # checking docs: generate_content_async exists.
-            
-            response = await self.model.generate_content_async(full_prompt)
+            # Use the chat completions endpoint, requesting JSON output
+            response = await self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                response_format={"type": "json_object"}
+            )
 
-            if not response:
-                logger.error("Empty response from Gemini.")
+            if not response.choices:
+                logger.error("Empty response from OpenRouter.")
                 return None
 
-            result_json = response.text
-
-            # Clean markdown if included
+            result_json = response.choices[0].message.content
+            
+            # Clean markdown if included (models sometimes ignore the JSON format request)
             if result_json.startswith("```"):
                 result_json = (
                     result_json.replace("```json", "")
@@ -95,22 +97,41 @@ Rules:
                     .strip()
                 )
 
-            if result_json == "null":
+            # Check for null signal responses
+            if result_json.lower() == "null" or not result_json:
                 logger.info("Not a valid trading signal.")
                 return None
 
             # Convert to Python dict
             signal_data = json.loads(result_json)
+            
+            # Unwrap if the model wraps the JSON in a top-level key (e.g., {"signal": {...}})
+            if isinstance(signal_data, dict) and 'signal' in signal_data and signal_data.keys() == {'signal'}:
+                signal_data = signal_data['signal']
+# ... inside parse_signal method ...
 
             # Validate with Pydantic
             try:
                 signal = TradeSignal(**signal_data)
                 logger.info(f"Parsed: {signal}")
                 return signal
-            except Exception as validation_error:
-                logger.error(f"Validation Error: {validation_error} | Data: {signal_data}")
+            except Exception:
+                # CHANGED: Don't print huge errors for chatter. Just log a simple warning.
+                logger.warning(f"Ignored message: AI parsed data but it was incomplete (likely not a signal).")
                 return None
 
         except Exception as e:
             logger.error(f"Parsing Error: {e}")
             return None
+        #     # Validate with Pydantic
+        #     try:
+        #         signal = TradeSignal(**signal_data)
+        #         logger.info(f"Parsed: {signal}")
+        #         return signal
+        #     except Exception as validation_error:
+        #         logger.error(f"Validation Error: {validation_error} | Data: {signal_data}")
+        #         return None
+
+        # except Exception as e:
+        #     logger.error(f"Parsing Error: {e}")
+        #     return None

@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     MT5_PATH: str = Field(r"C:\Program Files\MetaTrader 5\terminal64.exe", description="Path to MT5 terminal64.exe")
     
     # AI & Trading
-    GEMINI_API_KEY: str = Field(..., description="Google Gemini API Key")
+    # CHANGE THESE FIELDS
+    OPENROUTER_API_KEY: str = Field(..., description="OpenRouter API Key (Supports DeepSeek, Chimera, etc.)")
+    # Change the default value here
+    OPENROUTER_MODEL: str = Field("tngtech/deepseek-r1t2-chimera:free", description="Model to use via OpenRouter...")
+    # GEMINI_API_KEY: str = Field(..., description="Google Gemini API Key")
     FIXED_LOT_SIZE: float = Field(0.01, description="Fixed lot size for trades")
     
     # Magic Map (could be loaded from file, but keeping simple for now)
